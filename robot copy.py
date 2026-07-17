@@ -21,13 +21,6 @@ def to_persent(x):
         return 'null'
     return str(round(x*100,2))+'%'
 
-def to_change(x):
-    """将环比差值（小数）转为带正负号的百分比字符串，如 +3.21%，无数据返回 N/A"""
-    if x is None or pd.isna(x):
-        return 'N/A'
-    val = round(x * 100, 2)
-    return f'+{val}%' if val >= 0 else f'{val}%'
-
 
 def build_markdown(js, date):
     res = '# 巴基斯坦业务每日情况\n日期：%s  单位：USD' % date
@@ -37,22 +30,24 @@ def build_markdown(js, date):
         '\n总放款金额(排除冷静期)：%.1f，占月度目标：%s，本月累计占月度目标：%s'% (js.get('日总放款金额(排除冷静期)'),to_persent(js.get('日总放款金额占月度目标')),to_persent(js.get('日总放款金额本月累计占月度目标'))),
         '\n新客戳额人数：%d' % js.get('自然日新客戳额人数'),
         '\n新客放款订单数：%d，占月度目标：%s，本月累计占月度目标：%s'% (js.get('新客放款订单数'),to_persent(js.get('新客放款订单占月度目标')),to_persent(js.get('新客放款订单累计占月度目标'))),
-        '\n老客放款订单数：%d，占月度目标：%s，本月累计占月度目标：%s'% (js.get('老客放款订单数'),to_persent(js.get('老客放款订单占月度目标')),to_persent(js.get('老客放款订单累计占月度目标'))),
         '\n新客放款金额：%.1f' % js.get('新客放款金额'),
         '\n新客结清订单数：%.1f' % js.get('新客结清订单数'),
         '\n老客戳额人数：%d' % js.get('自然日老客戳额人数'),
+        '\n老客放款订单数：%d' % js.get('老客放款订单数'),
         '\n老客放款金额：%.1f' % js.get('老客放款金额'),
         '\n老客结清订单数：%.1f' % js.get('老客结清订单数'),
         '\n整体静态注册成交率：%s，占月度目标%s'% (to_persent(js.get('新客静态注册成交率')),to_persent(js.get('新客静态注册成交率和目标比值'))),
         '\n',
 
         '\n\n## 产品运营',
-        '\n注册戳额率T0：%s，占月度目标%s，环比%s' % (to_persent(js.get('注册戳额率T0')), to_persent(js.get('注册戳额率T0和目标比值')), to_change(js.get('注册戳额率T0环比'))),
-        '\n新客有额发标率T0：%s，占月度目标%s，环比%s' % (to_persent(js.get('新客有额发标率T0')), to_persent(js.get('新客有额发标率T0和目标比值')), to_change(js.get('新客有额发标率T0环比'))),
-        '\n新客优质客群有额发标率T0：%s，占月度目标%s，环比%s' % (to_persent(js.get('新客优质客群有额发标率T0')), to_persent(js.get('新客优质客群有额发标率T0和目标比值')), to_change(js.get('新客优质客群有额发标率T0环比'))),
-        '\n单笔单批新转老有额提现率T0：%s，占月度目标%s，环比%s' % (to_persent(js.get('单笔单批新转老有额提现率T0')), to_persent(js.get('单笔单批新转老有额提现率T0和目标比值')), to_change(js.get('单笔单批新转老有额提现率T0环比'))),
-        '\n单笔单批非新转老有额提现率T0：%s，占月度目标%s，环比%s' % (to_persent(js.get('单笔单批非新转老有额提现率T0')), to_persent(js.get('单笔单批非新转老有额提现率T0和目标比值')), to_change(js.get('单笔单批非新转老有额提现率T0环比'))),
-        '\n循环贷老客有额提现率T0：%s，占月度目标%s，环比%s' % (to_persent(js.get('循环贷老客有额提现率T0')), to_persent(js.get('循环贷老客有额提现率T0和目标比值')), to_change(js.get('循环贷老客有额提现率T0环比'))),
+        '\n端内T3新客注册申请率：%s，占月度目标%s'% (to_persent(js.get('端内T3新客注册申请率')),to_persent(js.get('T3新客注册申请率和目标比值'))),
+        '\n复贷申请率T0：%s，占月度目标%s' % (to_persent(js.get('复贷申请率T0')),to_persent(js.get('复贷申请率T0和目标比值'))),
+        '\n新客有额提现率t0：%s，占月度目标%s' % (to_persent(js.get('新客有额提现率t0')),to_persent(js.get('新客有额提现率t0和目标比值'))),
+        '\n老客有额提现率t0：%s，占月度目标%s' % (to_persent(js.get('老客有额提现率t0')),to_persent(js.get('老客有额提现率t0和目标比值'))),
+        # '\n新客有额提现率t7：%s，占月度目标%s'% (to_persent(js.get('新客有额提现率t7')),to_persent(js.get('新客有额提现率t7和目标比值'))),
+        # '\n老客有额提现率t7：%s，占月度目标%s'% (to_persent(js.get('老客有额提现率t7')),to_persent(js.get('老客有额提现率t7和目标比值'))),
+        '\n注册戳额率t0：%s，占月度目标：%s'% (to_persent(js.get('注册戳额率t0')),to_persent(js.get('注册戳额率t0和目标比值'))),
+        # '\n注册戳额率t7：%s，占月度目标：%s'% (to_persent(js.get('注册戳额率t7')),to_persent(js.get('注册戳额率t7和目标比值'))),
         '\n',
 
         '\n\n## 投放(新客)',
@@ -63,10 +58,8 @@ def build_markdown(js, date):
         '\n',
 
         '\n\n## 风控',
-        '\n自然日新客戳额通过率:%s'% (to_persent(js.get('自然日新客戳额通过率'))),
-        '\n自然日新客发标人数：%d, 自然日新客发标通过率:%s'% (js.get('新客发标人数'),to_persent(js.get('新客发标通过率'))),
-        '\n自然日老客戳额通过率:%s, 新转老通过率：%s'% (to_persent(js.get('自然日老客戳额通过率')),to_persent(js.get('自然日新转老戳额通过率'))),
-        '\n自然日老客发标人数：%d, 自然日老客发标通过率:%s, 新转老通过率：%s'% (js.get('老客发标人数'),to_persent(js.get('老客发标通过率')),to_persent(js.get('新转老发标通过率'))),
+        '\n自然日新客戳额人数：%d, 自然日新客戳额通过率:%s'% (js.get('自然日新客戳额人数'),to_persent(js.get('自然日新客戳额通过率'))),
+        '\n自然日老客戳额人数：%d, 自然日老客戳额通过率:%s, 新转老通过率：%s'% (js.get('自然日老客戳额人数'),to_persent(js.get('自然日老客戳额通过率')),to_persent(js.get('自然日新转老戳额通过率'))),
         '\n老客循环贷发标通过率：%s, 放款订单数:%d, 放款金额%.1f'% (to_persent(js.get('老客循环贷发标通过率')),js.get('老客循环贷放款订单数'),js.get('老客循环贷放款金额')),
         '\n新客平均期限：%.1f，占月度目标%s，老客平均期限%.1f，占月度目标%s'% (js.get('新客平均期限'),to_persent(js.get('新客平均期限和目标比值')),js.get('老客平均期限'),to_persent(js.get('老客平均期限和目标比值'))),
         '\n新客件均：%.1f，占月度目标%s'% (js.get('新客件均'),to_persent(js.get('新客件均和目标比值'))),
@@ -102,8 +95,8 @@ def send_webhook(url,input_json=None):
 
 
 if __name__ == "__main__":
-    # webhook = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=191d1cdf-833a-4410-8b65-138439fd066e'
-    webhook = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=471d9a53-ceca-4aa4-84c2-a75523e5309f'
+    webhook = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=191d1cdf-833a-4410-8b65-138439fd066e'
+    # webhook = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=471d9a53-ceca-4aa4-84c2-a75523e5309f'
 
 
     try:

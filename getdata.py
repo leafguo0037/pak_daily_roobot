@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from dateutil.relativedelta import relativedelta
 import json
-from datetime import datetime,date 
+from datetime import date,timedelta
 from odps import ODPS
 import math
 import itertools
@@ -78,7 +78,9 @@ class Get_info_json():
         big_panel_json['新客放款金额'] = round(month_eff[(month_eff['业务日期']==self.yesterday_date_str)&(month_eff['是否退款']=='否')&(month_eff['新老客']=='新客')]['成交金额'].sum()/self.config['汇率'],1)
         big_panel_json['老客放款金额'] = round(month_eff[(month_eff['业务日期']==self.yesterday_date_str)&(month_eff['是否退款']=='否')&(month_eff['新老客']=='老客')]['成交金额'].sum()/self.config['汇率'],1)
         big_panel_json['新客放款订单占月度目标'] = round(big_panel_json['新客放款订单数']/self.config['月新客放款订单数目标'],4)
+        big_panel_json['老客放款订单占月度目标'] = round(big_panel_json['老客放款订单数']/self.config['月老客放款订单数目标'],4)
         big_panel_json['新客放款订单累计占月度目标'] = round(month_eff[(month_eff['业务日期']<=self.yesterday_date_str)&(month_eff['是否退款']=='否')&(month_eff['新老客']=='新客')]['成交笔数'].sum()/self.config['月新客放款订单数目标'],4)
+        big_panel_json['老客放款订单累计占月度目标'] = round(month_eff[(month_eff['业务日期']<=self.yesterday_date_str)&(month_eff['是否退款']=='否')&(month_eff['新老客']=='老客')]['成交笔数'].sum()/self.config['月老客放款订单数目标'],4)
         return big_panel_json
 
     def get_info2(self):
@@ -220,8 +222,8 @@ class Get_info_json():
     def get_info7(self):
         big_panel_json={}
         sql7='''with term1 as (SELECT  listing_id,principal,list_amount,due_date
-        ,CASE WHEN repay_time IS NOT NULL THEN DATEDIFF(TO_DATE(repay_time),TO_DATE(due_date)) 
-        WHEN repay_time IS NULL THEN DATEDIFF(TO_DATE(NOW()),TO_DATE(due_date)) END as term1_overdue_days
+        ,CASE WHEN (repay_time IS NOT NULL and debt_status=2) THEN DATEDIFF(TO_DATE(repay_time),TO_DATE(due_date)) 
+        else DATEDIFF(TO_DATE(NOW()),TO_DATE(due_date)) END as term1_overdue_days
         ,DATEDIFF(TO_DATE(NOW()),TO_DATE(due_date)) as term1_due_days
         FROM    pk_data.dwd_asset_loan_debt
         WHERE   asset_product in ('cashloan','bnpl_chuanyin')
@@ -481,7 +483,7 @@ class Get_info_json():
 
         source as (SELECT user_id
         from pk_data.dwb_mkt_user_register_channel_dtl
-        where fst_level_channel !='cy_bnpl'),
+        where fst_level_channel not in ('cy_bnpl','daraz')),
 
         lim as (select flow_id,inserttime as limit_time,user_id
         FROM    pk_data.dwd_risk_user_pata_result_dicts_dly
@@ -571,31 +573,254 @@ class Get_info_json():
         data0 = o.execute_sql(sql1).open_reader(tunnel=True).to_pandas()
         big_panel_json['bnpl成交笔数'] = data0[(data0['dt']==self.yesterday_date_str)].shape[0]
         big_panel_json['本月bnpl成交笔数'] = data0.shape[0]
-        big_panel_json['bnpl成交金额'] = float(data0[(data0['dt']==self.yesterday_date_str)]['real_amount'].mean())
+        big_panel_json['bnpl成交金额'] = float(data0[(data0['dt']==self.yesterday_date_str)]['real_amount'].sum())/self.config['汇率']
         big_panel_json['bnpl平均期限'] = float(data0[(data0['dt']==self.yesterday_date_str)]['period_no'].astype(float).mean()*30)
         big_panel_json['bnpl平均首付比例'] = float(data0[(data0['dt']==self.yesterday_date_str)]['down_payment_ratio'].astype(float).mean())/100
         return big_panel_json
 
     
     def get_info16(self):
-        big_panel_json={}
-        sql1 = """
-        select user_id,flow_id,inserttime as limit_time,i_column["isReloanCustomer"] as is_reloan,i_column["creditLimit"] as credit_limit
-        FROM    pk_data.dwd_risk_user_pata_result_dicts_dly
-        WHERE   b_column["bizId"] in ("10000","10001")
-        AND     dt >= "2025-03-25"
-        and to_date(inserttime)='{yesterday}'
-        and p_column["processFlag"] = 1
-        """.format(yesterday=self.yesterday_date_str)
+        big_panel_json = {}
+        yesterday = self.yesterday_date_str
+        # 计算前一天日期
+        day_before = (datetime.datetime.strptime(yesterday, '%Y-%m-%d') - timedelta(days=1)).strftime('%Y-%m-%d')
 
-        data0 = o.execute_sql(sql1).open_reader(tunnel=True).to_pandas()
+        sql = """
+        WITH t0_lim AS (
+            SELECT user_id, flow_id,
+                i_column["isReloanCustomer"] AS is_reloan,
+                u_column['userPayedLoansCnt'] AS repay_cnt,
+                to_date(inserttime) AS limit_date
+            FROM pk_data.dwd_risk_user_pata_result_dicts_dly
+            WHERE dt >= '2026-01-01'
+            AND b_column["bizId"] IN ('10000','10001')
+            AND i_column["isWhiteListUser"] = 0
+            AND p_column["processFlag"] = '1'
+            AND i_column["isReloanCustomer"] = 1
+            AND to_date(inserttime) IN ('{yesterday}', '{day_before}')
+        ),
+        withdraw_data AS (
+            SELECT l.user_id, l.flow_id, l.limit_date,
+                CASE WHEN CAST(l.repay_cnt AS INT)=1 THEN '新转老' ELSE '非新转老' END AS loan_type,
+                CASE WHEN m.listing_id IS NOT NULL AND to_date(m.withdraw_time)=l.limit_date THEN 1 ELSE 0 END AS is_withdraw
+            FROM t0_lim l
+            LEFT JOIN pk_data.ddm_asset_limit_loan_dtl m 
+                ON l.flow_id=m.limit_flow_no AND m.asset_product='cashloan'
+            LEFT JOIN pk_data.dwd_asset_loan_list lo 
+                ON m.listing_id=lo.listing_id AND lo.bid_stage>='80'
+        )
+        SELECT loan_type, cast(limit_date as string) as limit_date,
+            COUNT(DISTINCT user_id) AS user_cnt,
+            SUM(is_withdraw) AS withdraw_cnt,
+            AVG(is_withdraw) AS withdraw_rate
+        FROM withdraw_data
+        GROUP BY loan_type, limit_date
+        """.format(yesterday=yesterday, day_before=day_before)
+
+        data = o.execute_sql(sql).open_reader(tunnel=True).to_pandas()
+
+        # 提取昨日数据
+        ndata_y = data[(data['loan_type']=='新转老') & (data['limit_date']==yesterday)]
+        odata_y = data[(data['loan_type']=='非新转老') & (data['limit_date']==yesterday)]
+        # 提取前日数据
+        ndata_b = data[(data['loan_type']=='新转老') & (data['limit_date']==day_before)]
+        odata_b = data[(data['loan_type']=='非新转老') & (data['limit_date']==day_before)]
+
+        rate_n_y = float(ndata_y['withdraw_rate'].iloc[0]) if not ndata_y.empty else 0
+        rate_o_y = float(odata_y['withdraw_rate'].iloc[0]) if not odata_y.empty else 0
+        rate_n_b = float(ndata_b['withdraw_rate'].iloc[0]) if not ndata_b.empty else None
+        rate_o_b = float(odata_b['withdraw_rate'].iloc[0]) if not odata_b.empty else None
+
+        big_panel_json['单笔单批新转老有额提现率T0'] = rate_n_y
+        big_panel_json['单笔单批新转老有额提现率T0和目标比值'] = rate_n_y / self.config.get('单笔单批新转老有额提现率T0目标', 1)
+        big_panel_json['单笔单批新转老有额提现率T0环比'] = (rate_n_y - rate_n_b) if rate_n_b is not None else None
+
+        big_panel_json['单笔单批非新转老有额提现率T0'] = rate_o_y
+        big_panel_json['单笔单批非新转老有额提现率T0和目标比值'] = rate_o_y / self.config.get('单笔单批非新转老有额提现率T0目标', 1)
+        big_panel_json['单笔单批非新转老有额提现率T0环比'] = (rate_o_y - rate_o_b) if rate_o_b is not None else None
+
+        return big_panel_json
+
+    def get_info17(self):
+        big_panel_json = {}
+        yesterday = self.yesterday_date_str
+        day_before = (datetime.datetime.strptime(yesterday, '%Y-%m-%d') - timedelta(days=1)).strftime('%Y-%m-%d')
+
+        sql = """
+        WITH t0_lim AS (
+            SELECT user_id, flow_id,
+                i_column["isReloanCustomer"] AS is_reloan,
+                c_column['creditLimit'] AS credit_limit,
+                to_date(inserttime) AS limit_date
+            FROM pk_data.dwd_risk_user_pata_result_dicts_dly
+            WHERE dt >= '2026-01-01'
+            AND b_column["bizId"] = '12001'
+            AND i_column["isReloanCustomer"] = 1
+            AND i_column["isCyclic"] = 'true'
+            AND to_date(inserttime) IN ('{yesterday}', '{day_before}')
+        ),
+        user_withdraw AS (
+            SELECT user_id, withdraw_time,
+                ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY withdraw_time ASC) AS rn
+            FROM pk_data.dwd_asset_loan_list
+            WHERE asset_product = 'cashloan'
+            AND bid_stage >= '80'
+            AND to_date(withdraw_time) IN ('{yesterday}', '{day_before}')
+        )
+        SELECT cast(l.limit_date as string) as limit_date,
+            COUNT(DISTINCT l.user_id) AS total_user_cnt,
+            SUM(CASE WHEN CAST(l.credit_limit AS FLOAT) > 0 THEN 1 ELSE 0 END) AS has_limit_cnt,
+            SUM(CASE WHEN CAST(l.credit_limit AS FLOAT) > 0 AND w.user_id IS NOT NULL THEN 1 ELSE 0 END) AS withdraw_cnt,
+            CAST(SUM(CASE WHEN CAST(l.credit_limit AS FLOAT) > 0 AND w.user_id IS NOT NULL THEN 1 ELSE 0 END) AS DOUBLE)
+                / NULLIF(SUM(CASE WHEN CAST(l.credit_limit AS FLOAT) > 0 THEN 1 ELSE 0 END), 0) AS withdraw_rate
+        FROM t0_lim l
+        LEFT JOIN user_withdraw w ON l.user_id = w.user_id AND w.rn = 1 AND l.limit_date = to_date(w.withdraw_time)
+        GROUP BY l.limit_date
+        """.format(yesterday=yesterday, day_before=day_before)
+
+        data = o.execute_sql(sql).open_reader(tunnel=True).to_pandas()
+
+        rate_y = float(data[data['limit_date']==yesterday]['withdraw_rate'].iloc[0]) \
+                if not data[data['limit_date']==yesterday].empty and data[data['limit_date']==yesterday]['withdraw_rate'].iloc[0] is not None else 0
+        rate_b = float(data[data['limit_date']==day_before]['withdraw_rate'].iloc[0]) \
+                if not data[data['limit_date']==day_before].empty and data[data['limit_date']==day_before]['withdraw_rate'].iloc[0] is not None else None
+
+        big_panel_json['循环贷老客有额提现率T0'] = rate_y
+        big_panel_json['循环贷老客有额提现率T0和目标比值'] = rate_y / self.config.get('循环贷老客有额提现率T0目标', 1)
+        big_panel_json['循环贷老客有额提现率T0环比'] = (rate_y - rate_b) if rate_b is not None else None
+
+        return big_panel_json
+
+    def get_info18(self):
+        big_panel_json = {}
+        yesterday = self.yesterday_date_str
+        day_before = (datetime.datetime.strptime(yesterday, '%Y-%m-%d') - timedelta(days=1)).strftime('%Y-%m-%d')
+
+        sql = """
+        WITH t0_lim AS (
+            SELECT user_id, flow_id,
+                i_column["isReloanCustomer"] AS is_reloan,
+                c_column['creditLimit'] AS credit_limit,
+                a_column['auditNewRiskGradeV1'] AS risk_grade,
+                to_date(inserttime) AS limit_date
+            FROM pk_data.dwd_risk_user_pata_result_dicts_dly
+            WHERE dt >= '2026-01-01'
+            AND b_column["bizId"] IN ('10000','10001')
+            AND i_column["isWhiteListUser"] = 0
+            AND p_column["processFlag"] = '1'
+            AND i_column["isReloanCustomer"] = 0
+            AND to_date(inserttime) IN ('{yesterday}', '{day_before}')
+        ),
+        loan_data AS (
+            SELECT limit_flow_no, listing_id,
+                to_date(loan_apply_time) AS loan_date
+            FROM pk_data.ddm_asset_limit_loan_dtl
+            WHERE asset_product = 'cashloan'
+        )
+        SELECT cast(l.limit_date as string) as limit_date,
+            SUM(CASE WHEN CAST(credit_limit AS FLOAT) > 0 THEN 1 ELSE 0 END) AS has_limit_cnt,
+            SUM(CASE WHEN CAST(credit_limit AS FLOAT) > 0 AND datediff(ld.loan_date, l.limit_date) = 0 THEN 1 ELSE 0 END) AS bid_cnt,
+            CAST(SUM(CASE WHEN CAST(credit_limit AS FLOAT) > 0 AND datediff(ld.loan_date, l.limit_date) = 0 THEN 1 ELSE 0 END) AS DOUBLE) 
+                / NULLIF(SUM(CASE WHEN CAST(credit_limit AS FLOAT) > 0 THEN 1 ELSE 0 END), 0) AS bid_rate,
+            SUM(CASE WHEN risk_grade IN ('A','B','C') AND CAST(credit_limit AS FLOAT) > 0 THEN 1 ELSE 0 END) AS high_quality_has_limit_cnt,
+            SUM(CASE WHEN risk_grade IN ('A','B','C') AND CAST(credit_limit AS FLOAT) > 0 AND datediff(ld.loan_date, l.limit_date) = 0 THEN 1 ELSE 0 END) AS high_quality_bid_cnt,
+            CAST(SUM(CASE WHEN risk_grade IN ('A','B','C') AND CAST(credit_limit AS FLOAT) > 0 AND datediff(ld.loan_date, l.limit_date) = 0 THEN 1 ELSE 0 END) AS DOUBLE)
+                / NULLIF(SUM(CASE WHEN risk_grade IN ('A','B','C') AND CAST(credit_limit AS FLOAT) > 0 THEN 1 ELSE 0 END), 0) AS high_quality_bid_rate
+        FROM t0_lim l
+        LEFT JOIN loan_data ld ON l.flow_id = ld.limit_flow_no
+        GROUP BY l.limit_date
+        """.format(yesterday=yesterday, day_before=day_before)
+
+        data = o.execute_sql(sql).open_reader(tunnel=True).to_pandas()
+
+        def get_rate(df, date, col):
+            row = df[df['limit_date']==date]
+            return float(row[col].iloc[0]) if not row.empty and row[col].iloc[0] is not None else (0 if date==yesterday else None)
+
+        rate_y = get_rate(data, yesterday, 'bid_rate')
+        rate_b = get_rate(data, day_before, 'bid_rate')
+        high_rate_y = get_rate(data, yesterday, 'high_quality_bid_rate')
+        high_rate_b = get_rate(data, day_before, 'high_quality_bid_rate')
+
+        big_panel_json['新客有额发标率T0'] = rate_y
+        big_panel_json['新客有额发标率T0和目标比值'] = rate_y / self.config.get('新客有额发标率T0目标', 1)
+        big_panel_json['新客有额发标率T0环比'] = (rate_y - rate_b) if rate_b is not None else None
+
+        big_panel_json['新客优质客群有额发标率T0'] = high_rate_y
+        big_panel_json['新客优质客群有额发标率T0和目标比值'] = high_rate_y / self.config.get('新客优质客群有额发标率T0目标', 1)
+        big_panel_json['新客优质客群有额发标率T0环比'] = (high_rate_y - high_rate_b) if high_rate_b is not None else None
+
         return big_panel_json
 
 
+    def get_info19(self):
+        big_panel_json = {}
+        yesterday = self.yesterday_date_str
+        day_before = (datetime.datetime.strptime(yesterday, '%Y-%m-%d') - timedelta(days=1)).strftime('%Y-%m-%d')
+
+        sql = """
+        WITH reg AS (
+            SELECT user_id, to_date(register_time) AS reg_date
+            FROM pk_data.s_dim_user_basic_info_snp
+            WHERE dt = MAX_PT('pk_data.s_dim_user_basic_info_snp')
+            AND to_date(register_time) IN ('{yesterday}', '{day_before}')
+        ),
+        lim AS (
+            SELECT user_id, to_date(inserttime) AS lim_date
+            FROM pk_data.dwd_risk_user_pata_result_dicts_dly
+            WHERE dt >= '2026-01-01'
+            AND b_column["bizId"] IN ('10000','10001')
+            AND i_column["isWhiteListUser"] = 0
+            AND to_date(inserttime) IN ('{yesterday}', '{day_before}')
+        )
+        SELECT cast(r.reg_date as string) as reg_date,
+            COUNT(DISTINCT r.user_id) AS reg_cnt,
+            COUNT(DISTINCT l.user_id) AS lim_cnt,
+            COUNT(DISTINCT l.user_id) * 1.0 / COUNT(DISTINCT r.user_id) AS reg_to_lim_rate_t0
+        FROM reg r
+        LEFT JOIN lim l ON r.user_id = l.user_id AND r.reg_date = l.lim_date
+        GROUP BY r.reg_date
+        """.format(yesterday=yesterday, day_before=day_before)
+
+        data = o.execute_sql(sql).open_reader(tunnel=True).to_pandas()
+
+        rate_y = float(data[data['reg_date']==yesterday]['reg_to_lim_rate_t0'].iloc[0]) \
+                if not data[data['reg_date']==yesterday].empty and data[data['reg_date']==yesterday]['reg_to_lim_rate_t0'].iloc[0] is not None else 0
+        rate_b = float(data[data['reg_date']==day_before]['reg_to_lim_rate_t0'].iloc[0]) \
+                if not data[data['reg_date']==day_before].empty and data[data['reg_date']==day_before]['reg_to_lim_rate_t0'].iloc[0] is not None else None
+
+        big_panel_json['注册戳额率T0'] = rate_y
+        big_panel_json['注册戳额率T0和目标比值'] = rate_y / self.config.get('注册戳额率T0目标', 1)
+        big_panel_json['注册戳额率T0环比'] = (rate_y - rate_b) if rate_b is not None else None
+
+        return big_panel_json
+
+    def get_info20(self):
+        big_panel_json = {}
+        yesterday = self.yesterday_date_str
+        sql = """
+        with listing as (select user_id,inserttime,flow_id as loan_flow_no,listing_id,b_column["bizId"] as biz_id,cast(p_column['processFlag'] as int) as listing_process_flag
+        ,cast(i_column["isReloanCustomer"] as int) as is_reloan,case when cast(u_column['userPayedLoansCnt'] as int)=1 then 1 else 0 end AS is_new_to_old
+        FROM    pk_data.dwd_risk_user_pata_result_dicts_dly
+        WHERE   b_column["bizId"] in ("20050",'22050') -- 戳额
+        AND     dt = "{yesterday}")
+
+        SELECT is_reloan,is_new_to_old,COUNT(listing_process_flag) as listing_num,sum(listing_process_flag) as pass_num,avg(listing_process_flag) as pass_rate
+        from listing
+        GROUP BY is_reloan,is_new_to_old;
+        """.format(yesterday=yesterday)
+
+        data = o.execute_sql(sql).open_reader(tunnel=True).to_pandas()
+        big_panel_json['新客发标人数'] = data[data['is_reloan']==0]['listing_num'].sum()
+        big_panel_json['老客发标人数'] = data[data['is_reloan']==1]['listing_num'].sum()
+        big_panel_json['新客发标通过率'] = float(data[(data['is_reloan']==0)]['pass_num'].sum()/data[(data['is_reloan']==0)]['listing_num'].sum())
+        big_panel_json['老客发标通过率'] = float(data[(data['is_reloan']==1)]['pass_num'].sum()/data[(data['is_reloan']==1)]['listing_num'].sum())
+        big_panel_json['新转老发标通过率'] = float(data[(data['is_reloan']==1)&(data['is_new_to_old']==1)]['pass_num'].sum()/data[(data['is_reloan']==1)&(data['is_new_to_old']==1)]['listing_num'].sum())
+        return big_panel_json
 
     def fill_big_panel_json(self):
         big_panel_json = {}
-        for i in range(1, 16):
+        for i in range(1, 21):
             method_name = f"get_info{i}"
             try:
                 method = getattr(self, method_name)
@@ -612,4 +837,4 @@ if __name__ == "__main__":
     import os
     os.chdir('/opt/workspace/pak_risk_group_drive/robot')
     info_o = Get_info_json()
-    print(info_o.get_info10())
+    print(info_o.get_info13())
